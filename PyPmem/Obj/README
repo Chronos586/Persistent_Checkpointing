@@ -1,0 +1,85 @@
+Modified Sagemaker Code:
+Found in Paths: 
+~/.local/lib/python3.8/site-packages/smdebug/core/access_layer/file.py
+~/.local/lib/python3.8/site-packages/smdebug/core/tfrecord/record_writer.py
+
+Compiling Shared Library Command:
+gcc -fPIC log.c -L/lib/x86_64-linux-gnu/ -lpmemlog -shared -o log.so
+
+------------------
+6-25-2021
+------------------
+
+Discovered that when writing to libpmemlog, null bytes were not considered.
+This was the cause of not all the bytes being copied from the serialized tensor
+to persistent memory. The reason for the null bytes is most likely due to the preliminary
+packing using struct that caused the addition of said null bytes. In normal file writing,
+this passing a struct is handled that writes the null bytes to a file.
+
+Consider using libpmemobj to handle the copying of null bytes and therefore reading of null
+bytes since this can be performed using a memcpy.
+
+Referencing the smdebug/core/tfrecord/record_writer.py, the header is packed
+using struct using 8 bytes for the length of the event string. The header is also concatenated
+with a 4 byte mask of the header.
+
+------------------
+7-4-2021
+------------------
+root.c contains the correct code for using the root object to append tensors to a given file.
+In this example, each pool is representative of a given appendable file. This will need to be
+modified to incorporate multiple files to a given persistent memory pool.
+
+--------------------------------------
+MULTIPLE CKPTS TO SINGLE POOL
+--------------------------------------
+To allow for multiple files to be residing in a single persistent memory pool, the root object
+will need to be utilized. The Root object can be a linked list or appendable dictionary of pointers
+to other files where these files can then be appended. Malloc will need to be used where each tensor
+will have its own region located in persistent memory.
+
+------------------
+7-5-2021
+------------------
+Developed bridge for python to append strings to libpmemobj in persistent memory
+Modified Amazon Sagemaker to interact with persistent memory. Currently when opening
+a file it initializes self._accessor to the path to the event checkpoint file. Every time
+a tensor is called to write, the persist_tensor function is called passing in the path to the
+checkpoint file, tensor, and tensor length. If a checkpoint file does not exist at the time
+the tensor is appended, a persistent memory pool is created for the corresponding checkpoint
+file.
+
+------------------
+7-15-2021
+------------------
+If you encounter a segmentation fault when opening the persistent memory pool make sure the
+path name in addition to the layout name is correct. If these are correct the error may occur
+that the persistent memory pool was not closed before opening.
+For pointers involving persistent memory, make sure to use PMEMoid. While using pointers such
+as char* will work initially, they are only active as long as the program is alive. If trying
+to access those same pointers, memory will be mapped differently to the addresses in persistent
+memory. Therefore once again use PMEMoid for whenever you are using a pointer to persistent memory.
+Attempted to adapt allocation for tensors but an error that was encountered was persisting a tensor
+with a size larger than the maximum value of a size_t. This size is passed in.
+
+------------------
+7-16-2021
+------------------
+It is important to consider the maximum size that can be passed in to persistent memory. There was a
+realization that the segmentation fault and allocation error was caused due to the size of the memory pool.
+This answers the question of when attempting allocate persistent memory that exceeds the size of the
+memory pool. Future work still needs to use the knwoledge of the dimension type to determine the overall size
+of the checkpoint to then allocate the pool.
+
+Within the smdebug/core/access_layer/utils.py, on line 60 the function file_exists checks whether a file
+exists containing the event file. Because the files are written to persistent memory, there is an error
+that occurs when attempting to locate a given persistent memory file. This will need to be modified to either
+ignore in the case of persistent memory or have a custom file check for persistent memory files.
+
+------------------
+7-18-2021
+------------------
+Encountered a bug when integrating the creation of the memory pool alongside the c program. This occured because
+I modified the code to pass in additional character pointer for the name of the pool. This was stored in a variable
+in python. However when passing a string from python to c using ctpyes, the string must be ENCODED to a byte string
+to be properly passed. Otherwise it may only pass one character.

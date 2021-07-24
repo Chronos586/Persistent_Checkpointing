@@ -1,0 +1,24 @@
+Modified Sagemaker Code:
+Found in Paths: 
+~/.local/lib/python3.8/site-packages/smdebug/core/access_layer/file.py
+~/.local/lib/python3.8/site-packages/smdebug/core/tfrecord/record_writer.py
+
+Compiling Shared Library Command:
+gcc -fPIC log.c -L/lib/x86_64-linux-gnu/ -lpmemlog -shared -o log.so
+
+------------------
+6-25-2021
+------------------
+
+Discovered that when writing to libpmemlog, null bytes were not considered.
+This was the cause of not all the bytes being copied from the serialized tensor
+to persistent memory. The reason for the null bytes is most likely due to the preliminary
+packing using struct that caused the addition of said null bytes. In normal file writing,
+this passing a struct is handled that writes the null bytes to a file.
+
+Consider using libpmemobj to handle the copying of null bytes and therefore reading of null
+bytes since this can be performed using a memcpy.
+
+Referencing the smdebug/core/tfrecord/record_writer.py, the header is packed
+using struct using 8 bytes for the length of the event string. The header is also concatenated
+with a 4 byte mask of the header.
